@@ -41,39 +41,43 @@
               ["/flowpoint/:flow-id/:point-id" :post (conj common-interceptors `rest/flow-point-push)]
               ["/flow-value-push/:flow-id" :post (conj common-interceptors `rest/flow-value-push)]})
 
-(def service {:env :prod
-              ::http/routes routes
-              ::http/allowed-origins {:creds false :allowed-origins (constantly true)}
-              ::http/secure-headers {:content-security-policy-settings {:object-src "none"}}
-              ;::http/secure-headers {:content-security-policy-settings {;:default-src "*"
-              ;                                                          ;:script-src "*"
-              ;                                                          :frame-ancestors "*"}
-              ;                       :x-frame-options "ALLOW"}
-              ::http/resource-path "/public-flowmaps"
-              :max-threads 50
-              ::http/type :jetty
-              ::http/host "0.0.0.0"
-              ::http/port 8080
-              ::http/container-options {:h2c? true
-                                        :h2? false
-                                        :ssl? false}})
-
-(defonce runnable-service (http/create-server service))
+(defn service [host port]
+  {:env :prod
+   ::http/routes routes
+   ::http/allowed-origins {:creds false :allowed-origins (constantly true)}
+   ::http/secure-headers {:content-security-policy-settings {:object-src "none"}}
+   ;::http/secure-headers {:content-security-policy-settings {;:default-src "*"
+   ;                                                          ;:script-src "*"
+   ;                                                          :frame-ancestors "*"}
+   ;                       :x-frame-options "ALLOW"}
+   ::http/resource-path "/public-flowmaps"
+   :max-threads 50
+   ::http/type :jetty
+   ::http/host (or host "0.0.0.0")
+   ::http/port (or port 8080)
+   ::http/container-options {:h2c? true
+                             :h2? false
+                             :ssl? false}})
 
 (def web-server (atom nil))
 
-(defn create-web-server! []
-  (ut/ppln [:*web (format "starting flowmaps web ui debugger @ http://localhost:%d" 8080) "🐇" ])
-  (reset! web-server (future (http/start runnable-service))))
+(defn create-web-server! [{:keys [host port]}]
+  (when (nil? @web-server)
+    (let [{::http/keys [host port] :as service} (service host port)
+          url (format "http://%s:%d" (if (= "0.0.0.0" host) "localhost" host) port)]
+      (ut/ppln [:*web (format "starting flowmaps web ui debugger @ %s" url) "🐇" ])
+      (reset! web-server (future (http/start (http/create-server service)))))))
 
 (defn destroy-web-server! []
   (ut/ppln [:*web (format "stopping web server @ %d" 8080)])
   (reset! web-server nil))
 
-(defn start! [] ;; start the web server and websocket server
-  (.start @websocket-server)
-  (create-web-server!)
-  (reset! websocket? true))
+(defn start!
+  ([] (start! {}))
+  ([server-opts] ;; start the web server and websocket server
+   (.start @websocket-server)
+   (create-web-server! server-opts)
+   (reset! websocket? true)))
 
 (defn stop! [] ;; stop the web server and websocket server
   (ut/ppln [:*websocket (format "stopping websocket server @ %d" 3000)])
@@ -124,7 +128,7 @@
                  :end (ut/ms-to-iso8601 endv)}
                 (if dbgn {:dbgn dbgn} {})))))
 
-(defmethod wl/handle-request :channel-gantt-data [{:keys [flow-id]}] ;; channel-history data for flow-id X, UI used in multiple ways 
+(defmethod wl/handle-request :channel-gantt-data [{:keys [flow-id]}] ;; channel-history data for flow-id X, UI used in multiple ways
   (let [data (format-channel-history flow-id)]
     (when (not (empty? data)) ;; don't want to overwrite UI w []
       [flow-id [flow-id :channel-history] data])))
@@ -133,7 +137,7 @@
   [flow-id [flow-id :network-map] (get @db/working-data flow-id)])
 
 (defmethod wl/handle-request :get-waffle-data [{:keys [waffle-day order-by limit search]
-                                                :or {limit 15 
+                                                :or {limit 15
                                                      order-by :time-asc}}] ;; for the waffle chart "airflow-esque" modal
   (let [today (ut/today-yyyymmdd)
         waffle-start (if (nil? waffle-day) (ut/date-str-to-unix today) (ut/date-str-to-unix waffle-day))
@@ -164,7 +168,7 @@
         timestamps (distinct (flatten (apply conj (for [[_ v] waffle-data]
                                                     (for [vv v] [(get vv :start)
                                                                  (get vv :end)])))))
-        ;; live-channels (into {} (for [[k v] @db/channels-atom] 
+        ;; live-channels (into {} (for [[k v] @db/channels-atom]
         ;;                          {k (vec (for [[ck cv] v
         ;;                                   :when (ut/chan-open? cv)] ck))}))
 
